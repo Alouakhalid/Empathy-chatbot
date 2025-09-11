@@ -1,61 +1,50 @@
-EmpathyBot - Professional Summary
-Project Overview
-EmpathyBot is a sophisticated AI-driven conversational tool designed to deliver empathetic and context-aware responses. Built using Streamlit and integrated with Google Generative AI, it analyzes user inputs—including text, emojis, and facial expressions from uploaded images (JPG, JPEG, PNG)—to detect emotions such as joy, sadness, distress, or fatigue. The application supports multilingual responses in Arabic and English, tailored to the user's input language, and maintains conversation continuity through a JSON-based memory system.
-Key Features
+🤖 EmpathyBot – ChatGPT Style with Voice (TTS & STT) + Image Analysis
+📌 Overview
 
-Emotion Analysis: Leverages advanced AI to interpret text, emojis, and image-based facial expressions.
-Multilingual Capability: Seamlessly responds in Arabic or English based on detected language.
-Image Integration: Supports image uploads for enhanced emotional context.
-Persistent Memory: Stores chat history in conversations.json for ongoing context.
-Intuitive Design: Features a clean, ChatGPT-inspired interface with a streamlined attach button.
+EmpathyBot is an AI-powered chat application built with Streamlit, designed to simulate a ChatGPT-like experience with extra features:
 
-Technical Requirements
+Interactive chat UI similar to ChatGPT.
 
-Python 3.7+
-Active internet connection for API usage
+Support for text, images, and voice.
 
-Installation & Setup
+TTS (Text-to-Speech) with Microsoft Edge TTS.
 
-Clone the repository:git clone <repository-url>
-cd empathybot
+STT (Speech-to-Text) with Google Speech Recognition.
 
+Automatic language detection (Arabic / English).
 
-Install dependencies:pip install streamlit google-generativeai langdetect emoji pillow
+Conversation history stored in a JSON file.
 
+🚀 Features
 
-Configure API key:
-Obtain a key from Google AI Studio.
-Replace YOUR_API_KEY_HERE in app2.py or set as an environment variable:export GOOGLE_API_KEY=your_api_key
+📝 Text Chat – Write your message and get friendly, empathetic AI responses.
 
-Update app2.py with:import os
-API_KEY = os.getenv("GOOGLE_API_KEY")
+🖼 Image Analysis – Upload an image and let the bot analyze it using Gemini API.
 
+🔊 Text-to-Speech (TTS) – The bot automatically speaks its responses.
 
+🎤 Speech-to-Text (STT) – Record your voice and convert it into text.
 
+💾 Conversation History – All chats are saved locally in conversations.json.
 
+🧑‍🤝‍🧑 Chat-like UI – User avatar 👤 and Bot avatar 🤖 for a natural experience.
 
-Usage
+🛠 Tech Stack
 
-Launch the app:streamlit run app2.py
+Streamlit
+ – Web interface.
 
+Google Generative AI (Gemini)
+ – AI model for text & image analysis.
 
-Interact by typing messages or uploading images via the attach button, then press Enter.
-Manage chats via the sidebar to start new conversations or delete existing ones.
+SpeechRecognition
+ – Speech-to-text.
 
-File Structure
+Edge-TTS
+ – Text-to-speech.
 
-app2.py: Core application logic.
-conversations.json: Auto-generated chat history file.
+LangDetect
+ – Language detection.
 
-Customization & Contribution
-
-Adjust the CSS in app2.py for design tweaks.
-Extend language support or enhance security (e.g., with cryptography for encryption).
-Contribute via pull requests or issue submissions on the repository.
-
-License
-Distributed under the MIT License - see LICENSE for details.
-Contact
-For inquiries, please use the repository's issue tracker.
-
-Last updated: 09:06 PM EEST, Wednesday, September 10, 2025
+Pillow (PIL)
+ – Image processing.
