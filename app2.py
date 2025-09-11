@@ -1,270 +1,262 @@
 import streamlit as st
 from langdetect import detect
 import google.generativeai as genai
-import json
-import uuid
+import json, uuid
 from datetime import datetime
-import emoji
+from PIL import Image
 import base64
 from io import BytesIO
-from PIL import Image
+import edge_tts
+import asyncio
+import nest_asyncio
+import speech_recognition as sr
+import hashlib
 
-API_KEY = "AIzaSyB_ei3R2CM7DRwYyZw3YkcPtTXhDe6vH14" 
+nest_asyncio.apply()
+
+API_KEY = "AIzaSyB_ei3R2CM7DRwYyZw3YkcPtTXhDe6vH14"
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 CONVERSATIONS_FILE = "conversations.json"
 
 def load_conversations():
     """تحميل المحادثات من ملف JSON"""
     try:
-        with open(CONVERSATIONS_FILE, 'r', encoding='utf-8') as f:
+        with open(CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
 
 def save_conversations(conversations):
     """حفظ المحادثات في ملف JSON"""
-    with open(CONVERSATIONS_FILE, 'w', encoding='utf-8') as f:
+    with open(CONVERSATIONS_FILE, "w", encoding="utf-8") as f:
         json.dump(conversations, f, ensure_ascii=False, indent=4)
 
 def detect_language(text):
-    """اكتشاف لغة النص (عربي أو إنجليزي فقط)"""
+    """تحديد اللغة (عربي أو إنجليزي)"""
     try:
-        lang = detect(text)
-        return "ar" if lang.startswith("ar") else "en"
+        return "ar" if detect(text).startswith("ar") else "en"
     except:
-        return "ar"  
-def analyze_emoji(text):
-    """تحليل الإيموجي في النص وإرجاع وصف نصي"""
-    emoji_dict = emoji.demojize(text, language='en')
-    if emoji_dict != text:
-        return emoji_dict
-    return "No emojis detected"
+        return "ar"
 
-def detect_emotion(text, emoji_analysis, image_analysis=None):
-    """اكتشاف المشاعر من النص، الإيموجي، والصورة (إن وجدت)"""
-    prompt = (
-        f"Detect the emotion in this text: '{text}'.\n"
-        f"Emoji analysis: '{emoji_analysis}'.\n"
-        f"Image facial expression analysis: '{image_analysis if image_analysis else 'No image provided'}'.\n"
-        f"Return only the emotion (joy, sadness, anger, fear, neutral, distress, fatigue, suffocation)."
-    )
-    response = model.generate_content(prompt)
-    return response.text.lower().strip()
+def get_image_hash(image):
+    """توليد معرف فريد للصورة بناءً على محتواها"""
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    return hashlib.md5(buffered.getvalue()).hexdigest()
 
 def analyze_image(image):
-    """تحليل تعبيرات الوجه في الصورة"""
-    try:
+    """تحليل الصورة باستخدام Gemini API"""
+    with st.spinner("جاري تحليل الصورة..."):
         buffered = BytesIO()
         image.save(buffered, format="JPEG")
-        img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
-        prompt = (
-            "Analyze the facial expression in this image and describe the emotional state "
-            "(e.g., tired, distressed, suffocated, happy, neutral). Return a short description."
-        )
+        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        prompt = "حلل محتوى الصورة ورد بشكل ودي وطبيعي."
         response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_str}])
-        return response.text.strip()
-    except Exception as e:
-        return f"Error analyzing image: {str(e)}"
+        return response.text.strip() if response.text else "حدث خطأ أثناء تحليل الصورة."
 
-def generate_response(user_message, chat_id, conversations, image=None):
-    """توليد رد تعاطفي طويل وطبيعي بناءً على النص، الإيموجي، والصورة"""
-    lang = detect_language(user_message) if user_message else "ar"
-    emoji_analysis = analyze_emoji(user_message) if user_message else "No text provided"
-    image_analysis = analyze_image(image) if image else None
-    emotion = detect_emotion(user_message, emoji_analysis, image_analysis)
-    
-    chat_history = conversations.get(chat_id, {"messages": []})["messages"]
-    history_context = "\n".join([f"User: {msg['input']}\nBot: {msg['output']}" for msg in chat_history[-3:]])  # آخر 3 رسائل
-    
-    rag_prompt = (
-        f"Based on the emotion '{emotion}', provide a detailed, natural, and empathetic response in {lang}. "
-        f"Use a conversational tone with multiple sentences, as if you're a close friend chatting casually. "
-        f"Make the response engaging, varied, and reflective of the user's emotion, considering the text, "
-        f"emojis ('{emoji_analysis}'), and facial expression ('{image_analysis if image_analysis else 'No image'}'). "
-        f"Include follow-up questions or suggestions to keep the conversation flowing. "
-        f"Here is the recent chat history for context:\n{history_context}"
-    )
-    response_text = model.generate_content(rag_prompt).text
-    
-    chat_history.append({
-        "input": user_message if user_message else "Image only",
-        "output": response_text,
-        "image_analysis": image_analysis if image_analysis else None
+def generate_response(user_message, chat_id, conversations, image=None, image_hash=None):
+    """توليد رد البوت مع مراعاة التاريخ"""
+    history = conversations.get(chat_id, {"messages": []})["messages"]
+
+    if image and image_hash:
+        for msg in history[-2:]:
+            if msg.get("role") == "user" and msg.get("input") == "📷 صورة مرفوعة" and msg.get("image_hash") == image_hash:
+                return None  
+    context = "\n".join([
+        f"User: {m.get('input', 'غير متوفر')}\nBot: {m.get('output', 'غير متوفر')}"
+        for m in history[-3:] if m.get('input') and m.get('output')
+    ])
+
+    with st.spinner("البوت بيفكر..."):
+        if image:
+            bot_reply = analyze_image(image)
+        else:
+            lang = detect_language(user_message) if user_message else "ar"
+            prompt = (
+                f"Language: {lang}\n"
+                f"History:\n{context}\n"
+                f"User: {user_message}\n"
+                f"رد وتفهم المشاعر وتحللها كمان وترد على اساسها طبيعي وتعاطفي كأنك صديق مقرب."
+            )
+            response = model.generate_content(prompt)
+            bot_reply = response.text.strip() if response.text else "حدث خطأ أثناء توليد الرد."
+
+    history.append({
+        "role": "user",
+        "input": user_message if user_message else "📷 صورة مرفوعة",
+        "timestamp": datetime.now().isoformat(),
+        "image_hash": image_hash if image else None
     })
-    conversations[chat_id]["messages"] = chat_history
+    history.append({
+        "role": "assistant",
+        "output": bot_reply,
+        "timestamp": datetime.now().isoformat()
+    })
+
+    conversations[chat_id]["messages"] = history
     conversations[chat_id]["last_updated"] = datetime.now().isoformat()
     save_conversations(conversations)
-    
-    return response_text
+    return bot_reply
 
-def run_streamlit():
+async def text_to_speech(text, filename="output.mp3"):
+    """تحويل النص إلى صوت باستخدام Edge TTS"""
+    communicate = edge_tts.Communicate(text, voice="ar-EG-SalmaNeural")
+    await communicate.save(filename)
+    return filename
+
+def play_tts(text):
+    """تشغيل الصوت"""
+    if not text:
+        return
+    filename = "output.mp3"
+    asyncio.run(text_to_speech(text, filename))
+    audio_file = open(filename, "rb").read()
+    st.audio(audio_file, format="audio/mp3")
+
+def speech_to_text():
+    """التعرف على الصوت وتحويله إلى نص"""
+    recognizer = sr.Recognizer()
+    try:
+        with sr.Microphone() as source:
+            st.session_state.recording_status = "جاري التسجيل... (اضغط 'إيقاف التسجيل' للإنهاء)"
+            st.info("🎤 اتكلم دلوقتي...")
+            recognizer.adjust_for_ambient_noise(source, duration=1)  
+            audio = recognizer.listen(source, timeout=None, phrase_time_limit=None)
+            with st.spinner("جاري معالجة الصوت..."):
+                text = recognizer.recognize_google(audio, language="ar-EG")
+            return text
+    except sr.UnknownValueError:
+        return "مافهمتش الصوت، جرب تتكلم بوضوح أكتر."
+    except sr.RequestError as e:
+        return f"في مشكلة في خدمة التعرف على الصوت، تأكد من الإنترنت: {str(e)}"
+    except sr.WaitTimeoutError:
+        return "ما سجلتش صوت، جرب تاني."
+    except Exception as e:
+        return f"حصل خطأ: {str(e)}. تأكد إن الميكروفون متوصل وشغال."
+
+def start_recording():
+    """بدء التسجيل"""
+    if not st.session_state.get("is_recording", False):
+        st.session_state.is_recording = True
+        st.session_state.voice_text = None
+        try:
+            mic = sr.Microphone()
+            mic.__enter__()  
+            mic.__exit__(None, None, None)  
+            st.session_state.voice_text = speech_to_text()
+        except Exception as e:
+            st.session_state.recording_status = f"فشل التسجيل: {str(e)}. تأكد إن الميكروفون متوصل."
+            st.session_state.is_recording = False
+
+def stop_recording(response_container, chat_id, conversations):
+    """إيقاف التسجيل ومعالجة النص فورًا"""
+    if st.session_state.get("is_recording", False):
+        st.session_state.is_recording = False
+        voice_text = st.session_state.get("voice_text", None)
+        if voice_text and not voice_text.startswith(("مافهمتش", "في مشكلة", "حصل خطأ", "ما سجلتش")):
+            st.session_state.recording_status = "تم التسجيل والمعالجة"
+            with response_container.container():
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(voice_text)
+            response = generate_response(voice_text, chat_id, conversations)
+            if response:
+                with response_container.container():
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(response)
+                        play_tts(response)
+        else:
+            st.session_state.recording_status = voice_text or "فشل التسجيل، جرب تاني."
+            st.error(st.session_state.recording_status)
+        st.session_state.voice_text = None
+
+def run_app():
+    """تشغيل تطبيق Streamlit"""
     st.set_page_config(page_title="EmpathyBot", page_icon="🤖", layout="wide")
-
-    st.markdown("""
-        <style>
-        .chat-container {
-            max-height: 70vh;
-            overflow-y: auto;
-            padding: 10px;
-        }
-        .stChatMessage {
-            margin: 10px 0;
-            padding: 10px;
-            border-radius: 5px;
-            max-width: 70%;
-        }
-        .user {
-            background: #d1e7dd;
-            color: #0f5132;
-            margin-left: auto;
-            text-align: right;
-        }
-        .bot {
-            background: #e2e3e5;
-            color: #333;
-        }
-        .stChatInput {
-            position: fixed;
-            bottom: 10px;
-            width: 70%;
-            padding: 5px;
-            display: flex;
-            align-items: center;
-        }
-        .stButton>button {
-            background: #4CAF50;
-            color: white;
-            border-radius: 5px;
-            padding: 5px 10px;
-        }
-        .sidebar .stButton>button {
-            width: 100%;
-            margin-top: 10px;
-        }
-        .upload-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 22px;
-            height: 22px;
-            border-radius: 3px;
-            background: #e9ecef;
-            color: #333;
-            cursor: pointer;
-            margin-right: 5px;
-            font-size: 13px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-            transition: background 0.2s;
-        }
-        .upload-btn:hover {
-            background: #dfe3e8;
-        }
-        .stFileUploader {
-            width: 22px !important;
-            display: inline-block !important;
-        }
-        .stFileUploader > div > div > div {
-            padding: 0 !important;
-            background: none !important;
-            border: none !important;
-        }
-        .stFileUploader label {
-            display: none !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.title("EmpathyBot - رفيقك العاطفي 🤗")
-    st.markdown("كلمني عن إحساسك أو ارفع صورة، هرد عليك بطريقة تناسبك!")
+    st.title("🤖 EmpathyBot ")
 
     conversations = load_conversations()
-    
     if "chat_id" not in st.session_state:
         st.session_state.chat_id = str(uuid.uuid4())
         conversations[st.session_state.chat_id] = {
             "messages": [],
             "created_at": datetime.now().isoformat(),
-            "title": "محادثة جديدة"
+            "title": "New Chat"
         }
         save_conversations(conversations)
 
-    with st.sidebar:
-        st.header("المحادثات")
-        chat_options = {chat_id: conv["title"] for chat_id, conv in conversations.items()}
-        selected_chat = st.selectbox("اختر محادثة", options=list(chat_options.keys()), format_func=lambda x: chat_options[x])
-        if st.button("محادثة جديدة"):
-            new_chat_id = str(uuid.uuid4())
-            conversations[new_chat_id] = {
-                "messages": [],
-                "created_at": datetime.now().isoformat(),
-                "title": f"محادثة {len(conversations) + 1}"
-            }
-            st.session_state.chat_id = new_chat_id
-            save_conversations(conversations)
-            st.session_state.messages = []
-        
-        if st.button("حذف المحادثة الحالية"):
-            if st.session_state.chat_id in conversations:
-                del conversations[st.session_state.chat_id]
-                save_conversations(conversations)
-                st.session_state.chat_id = str(uuid.uuid4())
-                conversations[st.session_state.chat_id] = {
-                    "messages": [],
-                    "created_at": datetime.now().isoformat(),
-                    "title": "محادثة جديدة"
-                }
-                save_conversations(conversations)
-                st.session_state.messages = []
+    if "last_image_hash" not in st.session_state:
+        st.session_state.last_image_hash = None
+    if "uploaded_file" not in st.session_state:
+        st.session_state.uploaded_file = None
+    if "is_recording" not in st.session_state:
+        st.session_state.is_recording = False
+    if "recording_status" not in st.session_state:
+        st.session_state.recording_status = "غير مسجل"
+    if "voice_text" not in st.session_state:
+        st.session_state.voice_text = None
 
-    if selected_chat != st.session_state.chat_id:
-        st.session_state.chat_id = selected_chat
-        st.session_state.messages = [
-            {"role": "user" if msg["input"] else "assistant", "content": msg.get("input", msg.get("output"))}
-            for msg in conversations[selected_chat]["messages"]
-        ]
+    messages = conversations[st.session_state.chat_id]["messages"]
 
-    with st.container():
-        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-        if "messages" not in st.session_state:
-            st.session_state.messages = [
-                {"role": "user" if msg["input"] else "assistant", "content": msg.get("input", msg.get("output"))}
-                for msg in conversations[st.session_state.chat_id]["messages"]
-            ]
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"], avatar="🧑" if message["role"] == "user" else "🤖"):
-                st.markdown(message["content"], unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    response_container = st.empty()
 
-    with st.container():
-        st.markdown('<div class="stChatInput">', unsafe_allow_html=True)
-        cols = st.columns([0.5, 10])  
-        with cols[0]:
-            uploaded_image = st.file_uploader("📎", type=["jpg", "jpeg", "png"], key="image_uploader", label_visibility="collapsed")
-        with cols[1]:
-            prompt = st.chat_input("اكتبي رسالتك...")
-        
-        if prompt or uploaded_image:
-            if prompt:
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user", avatar="🧑"):
-                    st.markdown(prompt, unsafe_allow_html=True)
-            
-            image = None
-            if uploaded_image:
-                image = Image.open(uploaded_image)
-                st.image(image, width=200, caption="الصورة المرفوعة")
-            
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user":
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(msg.get("input", "غير متوفر"))
+        elif msg.get("role") == "assistant":
             with st.chat_message("assistant", avatar="🤖"):
-                with st.spinner("بفكر..."):
-                    response = generate_response(prompt if prompt else "", st.session_state.chat_id, conversations, image)
-                st.markdown(response, unsafe_allow_html=True)
-            
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown(msg.get("output", "غير متوفر"))
+                if i == len(messages) - 1:
+                    play_tts(msg.get("output"))
+
+    st.write(f"حالة التسجيل: {st.session_state.recording_status}")
+
+    col1, col2, col3 = st.columns([6, 1, 1])
+    with col1:
+        user_msg = st.chat_input("اكتب رسالتك هنا...")
+    with col2:
+        uploaded = st.file_uploader("📎", type=["jpg", "jpeg", "png"], label_visibility="collapsed", key="file_uploader")
+        st.session_state.uploaded_file = uploaded
+    with col3:
+        if st.session_state.is_recording:
+            if st.button("🛑 إيقاف التسجيل"):
+                stop_recording(response_container, st.session_state.chat_id, conversations)
+                st.rerun()
+        else:
+            if st.button("🎤 بدء التسجيل"):
+                start_recording()
+                st.rerun()
+
+    if user_msg:
+        with response_container.container():
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(user_msg)
+        response = generate_response(user_msg, st.session_state.chat_id, conversations)
+        if response:
+            with response_container.container():
+                with st.chat_message("assistant", avatar="🤖"):
+                    st.markdown(response)
+                    play_tts(response)
+        st.rerun()
+
+    if st.session_state.uploaded_file:
+        image = Image.open(st.session_state.uploaded_file)
+        image_hash = get_image_hash(image)
+        if image_hash != st.session_state.last_image_hash:
+            response = generate_response("", st.session_state.chat_id, conversations, image=image, image_hash=image_hash)
+            if response:
+                with response_container.container():
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown("📷 صورة مرفوعة")
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(response)
+                        play_tts(response)
+                st.session_state.last_image_hash = image_hash
+                st.session_state.uploaded_file = None
+                st.success("تم تحليل الصورة وإزالتها من الواجهة!")
+                st.rerun()
 
 if __name__ == "__main__":
-    run_streamlit()
+    run_app()
